@@ -1,7 +1,20 @@
-import requests
-import os
 import cx_Oracle
 
+import requests
+
+# Conexão com a API do Conselho Federal de Medicina 
+# para buscar médicos de acordo com seu CRM
+def crm_api(crm, uf) -> bool:
+    requisicao = requests.get(f"https://www.consultacrm.com.br/api/index.php?tipo=crm&uf={uf}&q={crm}&chave=3350280842&destino=json")
+    requisicao_dic = requisicao.json()
+
+    # Verifica se a API retornou algo
+    if requisicao_dic['item'] == []:
+        return False
+    else:
+        return True
+
+# Insere dados no banco
 def insert_bd(tabela: str, dados: dict):
     try:
         if tabela == 'conta':
@@ -44,6 +57,7 @@ def insert_bd(tabela: str, dados: dict):
     except:
         print("\033[031m--> Erro no cadastro dos dados.\033[m\n")
 
+# Atualiza dados já registrados no banco
 def update_bd(tabela: str, dado_antigo: int, novo_dado):
 
     # Convertendo para o nome da coluna no banco
@@ -60,11 +74,11 @@ def update_bd(tabela: str, dado_antigo: int, novo_dado):
     if dado_antigo == 'Profissão':
         dado_antigo = 'nm_profissao'
     
+    # Convertendo para o nome da tabela no banco
     if tabela == 'DA CONTA':
         tabela = 'conta'
     else:
         tabela = tabela.lower()
-
     if dado_antigo == 'ds_email':
         tabela = 'email'
     
@@ -76,8 +90,10 @@ def update_bd(tabela: str, dado_antigo: int, novo_dado):
     inst_alteracao.execute(alteracao)
     conn.commit()
 
+# Consulta o email e senha digitados no banco de dados
 def select_login(email, senha) ->str:
     try:
+        # Retorna o nome e o tipo de conta registrados
         consulta_login = f'''SELECT c.nm_completo, u.tp_conta
         FROM t_hn_conta c
         JOIN t_hn_email e ON c.id_conta = e.fk_id_conta
@@ -93,7 +109,8 @@ def select_login(email, senha) ->str:
         nome = ''
         tp_conta = ''
     return nome, tp_conta
-        
+
+# Consulta todos os dados de uma tabela específica        
 def select_dados(tabela) -> dict:
     lista_dados = []
     consulta_max_id = f'SELECT MAX(id_{tabela}) FROM t_hn_{tabela}'
@@ -138,8 +155,90 @@ def select_dados(tabela) -> dict:
 
     return dados_dict
 
+# Consulta todos os dados possíveis de uma conta registrada
+def select_todos_dados(tp_conta: str) -> dict:
+
+    # Consulta para uma conta de usuário
+    if tp_conta == 'usuario':
+        consulta_usuario = """
+    SELECT
+        c.nm_completo,
+        c.ds_senha,
+        e.ds_email,
+        e.st_email,
+        u.tp_conta
+    FROM
+        t_hn_conta c
+        LEFT JOIN t_hn_email e ON c.id_conta = e.fk_id_conta
+        LEFT JOIN t_hn_usuario u ON c.id_conta = u.fk_id_conta
+    WHERE
+        c.id_conta = u.fk_id_conta
+"""
+
+        inst_consulta.execute(consulta_usuario)
+        usuarios = inst_consulta.fetchall()
+
+        # Colocar cada linha de dados em um dicionário
+        dados_json = {}
+        cont = 0
+        for resultado in usuarios:
+            cont += 1
+            dados_dict = {
+                "nm_completo": resultado[0],
+                "ds_senha": resultado[1],
+                "ds_email": resultado[2],
+                "st_email": resultado[3],
+                "tp_conta": resultado[4]
+            }
+            dados_json[f'Usuario {cont}'] = dados_dict
+    
+    # Consulta para uma conta de especialista
+    else:
+        consulta_especialista = """
+    SELECT
+        c.nm_completo,
+        c.ds_senha,
+        em.ds_email,
+        em.st_email,
+        es.nr_cpf,
+        es.ds_crm,
+        es.nm_profissao
+    FROM
+        t_hn_conta c
+        LEFT JOIN t_hn_email em ON c.id_conta = em.fk_id_conta
+        LEFT JOIN t_hn_especialista es ON c.id_conta = es.fk_id_conta
+    WHERE
+        c.id_conta = es.fk_id_conta
+"""
+
+        inst_consulta.execute(consulta_especialista)
+
+        # Obter os resultados
+        especialistas = inst_consulta.fetchall()
+
+        # Colocar cada linha de dados em um dicionário
+        dados_json = {}
+        cont = 0
+        for resultado in especialistas:
+            cont += 1
+            dados_dict = {
+                "nm_completo": resultado[0],
+                "ds_senha": resultado[1],
+                "ds_email": resultado[2],
+                "st_email": resultado[3],
+                "nr_cpf": resultado[4],
+                "ds_crm": resultado[5],
+                "nm_profissao": resultado[6]
+            }
+            dados_json[f'Especialista {cont}'] = dados_dict
+    
+    return dados_json
+
+# Deleta uma conta e todos os seus dados no banco
 def delete_bd(tp_conta: str, dado: str):
     try:
+
+        # Instrução SQL para deletar uma conta de usuário
         if tp_conta == 'usuario':
             consulta_id_conta = f'''SELECT fk_id_conta FROM t_hn_email WHERE ds_email = '{dado}' '''
 
@@ -149,8 +248,10 @@ def delete_bd(tp_conta: str, dado: str):
             deletar_usuario = f'''DELETE FROM t_hn_usuario WHERE fk_id_conta = {id_conta}'''
             inst_exclusao.execute(deletar_usuario)
             conn.commit()
+
+        # Instrução SQL para deletar uma conta de especialista    
         else:
-            consulta_id_conta = f'''SELECT fk_id_conta FROM t_hn_especialista WHERE nr.cpf = '{dado}' '''
+            consulta_id_conta = f'''SELECT fk_id_conta FROM t_hn_especialista WHERE nr_cpf = '{dado}' '''
 
             inst_consulta.execute(consulta_id_conta)
             id_conta = inst_consulta.fetchone()[0]
@@ -159,10 +260,12 @@ def delete_bd(tp_conta: str, dado: str):
             inst_exclusao.execute(deletar_especialista)
             conn.commit()
         
+        # Instrução SQL para deletar o email de uma conta
         deletar_email = f'''DELETE FROM t_hn_email WHERE fk_id_conta = {id_conta}'''
         inst_exclusao.execute(deletar_email)
         conn.commit()
-
+        
+        # Instrução SQL para deletar a conta
         deletar_conta = f'''DELETE FROM t_hn_conta WHERE id_conta = {id_conta}'''
         inst_exclusao.execute(deletar_conta)
         conn.commit()
